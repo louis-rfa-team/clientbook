@@ -1,6 +1,6 @@
 # 客戶經營名單系統｜設定說明
 
-**系統網址：https://louis860819.github.io/louis-team-clientbook/**
+**系統網址：https://louis-rfa-team.github.io/clientbook/**
 
 業務用 Google 帳號登入，各自建立人脈名單；管理員在「團隊後台」檢視全部業務的名單狀況。業務之間互相看不到彼此的名單。
 
