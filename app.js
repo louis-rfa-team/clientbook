@@ -268,9 +268,9 @@ function renderSummary(){
     <div class="stat"><div class="k">名單總數 ・ 分級分佈</div><div class="v num">${n}<small>位</small></div>
       <div class="dist">${seg("S")}${seg("A")}${seg("B")}${seg("C")}</div>
       <div class="dist-legend"><span><b style="color:var(--gS)">${g.S}</b>S</span><span><b style="color:var(--gA)">${g.A}</b>A</span><span><b style="color:var(--gB)">${g.B}</b>B</span><span><b style="color:var(--gC)">${g.C}</b>C</span>${g[""]?`<span><b>${g[""]}</b>未評</span>`:""}</div></div>
-    <div class="stat"><div class="k">7 天內待跟進</div><div class="v num">${due}<small>位</small></div></div>
-    <div class="stat"><div class="k">已逾期未聯絡</div><div class="v num ${over?"alert":""}">${over}<small>位</small></div></div>
-    <div class="stat"><div class="k">30 天內壽星</div><div class="v num">${bd}<small>位</small></div></div>
+    <div class="stat"><div class="k">7 天內待跟進</div><div class="v num">${due}<small>位</small></div>${due?'<button type="button" class="stat-link" data-jump="due">查看名單 ›</button>':""}</div>
+    <div class="stat"><div class="k">已逾期未聯絡</div><div class="v num ${over?"alert":""}">${over}<small>位</small></div>${over?'<button type="button" class="stat-link" data-jump="due">查看名單 ›</button>':""}</div>
+    <div class="stat"><div class="k">30 天內壽星</div><div class="v num">${bd}<small>位</small></div>${bd?'<button type="button" class="stat-link" data-jump="bday">查看名單 ›</button>':""}</div>
     <div class="stat"><div class="k">成交／轉介紹</div><div class="v num">${won}<small>位</small></div></div>`;
   const ac=$("#actCnt");ac.textContent=due;ac.classList.toggle("hot",over>0);
 }
@@ -347,13 +347,13 @@ document.addEventListener("click",e=>{
 async function setStatus(id,st,msg){try{await backend.setStatus(id,st);toast(msg)}catch(e){toast(errMsg(e,"更新失敗"))}}
 
 /* ---------- render: actions ---------- */
-function aItem(c,right){const g=gradeOf(c);return `<li><button type="button" data-id="${esc(keyOf(c))}"><span class="grade g" data-g="${g}">${g||"–"}</span><span class="an">${esc(c.name)}<small>${esc(metaLine(c))}</small></span><span class="ad">${right}</span></button></li>`}
+function aItem(c,right){const g=gradeOf(c);return `<li><button type="button" data-id="${esc(keyOf(c))}"><span class="grade g" data-g="${g}">${g||"–"}</span><span class="an">${esc(c.name)}<small>${esc(metaLine(c))}</small></span><span class="ad">${right}</span><span class="go">查看 ›</span></button></li>`}
 function renderAct(){
   const all=items();
   const due=all.filter(c=>isActiveStage(c)&&c.nextDate&&dayDiff(c.nextDate)<=14).sort((a,b)=>a.nextDate<b.nextDate?-1:1);
   $("#actDue").innerHTML=due.length?due.map(c=>aItem(c,dueHtml(c))).join(""):`<li class="none">目前沒有待跟進的客戶</li>`;
   const bd=all.map(c=>[c,daysToBirthday(c)]).filter(([c,d])=>d!=null&&d<=30).sort((a,b)=>a[1]-b[1]);
-  $("#actBday").innerHTML=bd.length?bd.map(([c,d])=>aItem(c,`<span class="due ${d<=3?"soon":""}">${d===0?"今天生日":d+" 天後・"+c.birthday.slice(5).replace("-","/")}</span>`)).join(""):`<li class="none">30 天內沒有壽星</li>`;
+  $("#actBday").innerHTML=bd.length?bd.map(([c,d])=>aItem(c,`<span class="due ${d<=3?"soon":""}">${d===0?"今天生日":d+" 天後・"+c.birthday.slice(5).replace("-","/")}${ageOf(c)!=null?" ・ 滿 "+(d===0?ageOf(c):ageOf(c)+1)+" 歲":""}</span>`)).join(""):`<li class="none">30 天內沒有壽星</li>`;
   const idle=all.filter(c=>["S","A"].includes(gradeOf(c))&&!c.nextDate&&isActiveStage(c)).sort((a,b)=>scoreOf(b).score-scoreOf(a).score);
   $("#actIdle").innerHTML=idle.length?idle.map(c=>aItem(c,`<span class="num">${scoreOf(c).score} 分</span>`)).join(""):`<li class="none">高分名單都已排程</li>`;
 }
@@ -371,6 +371,13 @@ function renderAna(){
   const dc=P.disc.map(n=>({t:n,n:all.filter(c=>c.disc===n).length}));const md=Math.max(1,...dc.map(x=>x.n));
   $("#anaDisc").innerHTML=dc.map(x=>`<div class="hbar"><span>${x.t}</span><span class="t"><i style="width:${x.n/md*100}%;background:var(--navy)"></i></span><span class="c">${x.n}</span></div>`).join("");
 }
+document.addEventListener("click",e=>{
+  const j=e.target.closest("[data-jump]");if(!j)return;
+  S.view="act";rememberUI();renderView();
+  const panel=$(j.dataset.jump==="bday"?"#actBday":"#actDue").closest(".panel");
+  panel.scrollIntoView({behavior:matchMedia("(prefers-reduced-motion: reduce)").matches?"auto":"smooth",block:"start"});
+  panel.classList.remove("flash");void panel.offsetWidth;panel.classList.add("flash");
+});
 function renderView(){
   document.querySelectorAll("#personal .tab").forEach(t=>t.setAttribute("aria-selected",t.dataset.view===S.view));
   $("#view-list").hidden=S.view!=="list";$("#view-act").hidden=S.view!=="act";$("#view-ana").hidden=S.view!=="ana";
