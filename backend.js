@@ -8,7 +8,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
 import {
   getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, collectionGroup,
-  onSnapshot, serverTimestamp
+  onSnapshot, serverTimestamp, query, where
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 
 const app = initializeApp(FIREBASE_CONFIG);
@@ -76,7 +76,30 @@ export const backend = {
 
   deleteClient(uid, cid) { return deleteDoc(doc(db, "users", uid, "clients", cid)); },
 
+  // ── 主管：自己所有下線（任何一層）──
+  watchDownline(uid, cb, err) {
+    return onSnapshot(query(collection(db, "users"), where("managers", "array-contains", uid)),
+      snap => cb(snap.docs.map(d => ({ id: d.id, ...d.data() }))), err);
+  },
+
+  watchUserClients(uid, cb, err) {
+    return onSnapshot(collection(db, "users", uid, "clients"),
+      snap => cb(snap.docs.map(d => ({ ...d.data(), id: d.id, _owner: uid }))), err);
+  },
+
   // ── 管理員 ──
+  setOrg(uid, managerUid, managers) {
+    return updateDoc(doc(db, "users", uid), { managerUid: managerUid || null, managers: managers || [] });
+  },
+
+  watchAdmins(cb, err) {
+    return onSnapshot(collection(db, "admins"), snap => cb(snap.docs.map(d => ({ id: d.id, ...d.data() }))), err);
+  },
+
+  addAdmin(uid) { return setDoc(doc(db, "admins", uid), { role: "admin", addedAt: serverTimestamp() }); },
+
+  removeAdmin(uid) { return deleteDoc(doc(db, "admins", uid)); },
+
   watchUsers(cb, err) {
     return onSnapshot(collection(db, "users"), snap => cb(snap.docs.map(d => ({ id: d.id, ...d.data() }))), err);
   },

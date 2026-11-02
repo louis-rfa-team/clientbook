@@ -80,9 +80,10 @@ const isActiveStage=c=>!["won","hold"].includes(c.stage);
 
 /* ---------- session context ---------- */
 const Ctx={
-  user:null,profile:null,admin:false,
+  user:null,profile:null,admin:false,manager:false,
   my:new Map(),myReady:false,
   team:new Map(),teamReady:false,users:[],usersReady:false,
+  downline:[],admins:[],teamStarted:false,teamLoaded:new Set(),
   mode:"mine",viewUid:null,
   subs:{}
 };
@@ -96,6 +97,16 @@ function itemsMap(){
 const items=()=>[...itemsMap().values()];
 const ready=()=>Ctx.mode==="mine"?Ctx.myReady:Ctx.teamReady;
 const userById=id=>Ctx.users.find(u=>u.id===id);
+const me=()=>Ctx.user&&Ctx.user.uid;
+const selfUser=()=>Object.assign({},Ctx.profile||{},{id:me()});
+const isAdminUid=id=>Ctx.admins.some(a=>a.id===id);
+const isOwnerUid=id=>Ctx.admins.some(a=>a.id===id&&a.role==="owner");
+// 管理員看全部；主管看自己（含）＋所有下線
+function refreshMgrUsers(){if(!Ctx.admin)Ctx.users=[selfUser(),...Ctx.downline]}
+function clientsOf(uid){
+  if(uid===me()&&!Ctx.admin)return [...Ctx.my.values()].filter(c=>!c.demo);
+  return [...Ctx.team.values()].filter(c=>c._owner===uid);
+}
 const userName=u=>u?(u.displayName||u.email||"未命名業務"):"未命名業務";
 
 async function saveClient(c){
@@ -155,7 +166,7 @@ function doSignOut(){closeDrawer(true);stopAll();backend.signOut()}
 if(!backend.configured){show("screen-setup")}
 else backend.onAuth(async u=>{
   stopAll();
-  Ctx.user=u;Ctx.profile=null;Ctx.admin=false;Ctx.my=new Map();Ctx.myReady=false;Ctx.team=new Map();Ctx.teamReady=false;Ctx.users=[];Ctx.usersReady=false;Ctx.mode="mine";Ctx.viewUid=null;
+  Ctx.user=u;Ctx.profile=null;Ctx.admin=false;Ctx.manager=false;Ctx.my=new Map();Ctx.myReady=false;Ctx.team=new Map();Ctx.teamReady=false;Ctx.users=[];Ctx.usersReady=false;Ctx.downline=[];Ctx.admins=[];Ctx.teamStarted=false;Ctx.teamLoaded=new Set();Ctx.mode="mine";Ctx.viewUid=null;
   if(!u){show("screen-login");return}
   show("screen-boot");$("#bootMsg").textContent="正在確認帳號…";
   try{
@@ -187,7 +198,17 @@ function route(){
   }
   if(Ctx.admin&&!Ctx.subs.users){
     Ctx.subs.users=backend.watchUsers(list=>{Ctx.users=list;Ctx.usersReady=true;renderAll()},err=>toast(errMsg(err,"讀取業務名單失敗")));
+    Ctx.subs.admins=backend.watchAdmins(list=>{Ctx.admins=list;renderAll()},()=>{});
   }
+  if(!Ctx.admin&&!Ctx.subs.users){
+    Ctx.subs.users=backend.watchDownline(me(),list=>{
+      Ctx.downline=list;Ctx.manager=list.length>0;refreshMgrUsers();Ctx.usersReady=true;
+      if(Ctx.teamStarted)syncTeamSubs();
+      if(!Ctx.manager&&Ctx.mode!=="mine")setMode("mine");
+      renderAll();
+    },err=>{console.warn(err);Ctx.usersReady=true;renderAll()});
+  }
+  refreshMgrUsers();
   renderAll();
 }
 $("#pendSave").addEventListener("click",async()=>{
@@ -201,12 +222,27 @@ function setMode(mode,viewUid){
   if(S.dirty){showConfirm("尚未儲存的修改","切換前會放棄這次的修改。","放棄並切換",()=>{S.dirty=false;closeDrawer(true);setMode(mode,viewUid)});return}
   closeDrawer(true);
   Ctx.mode=mode;Ctx.viewUid=viewUid||null;
-  if(mode!=="mine"&&!Ctx.subs.team){
+  if(mode!=="mine"&&!Ctx.admin){Ctx.teamStarted=true;syncTeamSubs()}
+  if(mode!=="mine"&&Ctx.admin&&!Ctx.subs.team){
     Ctx.subs.team=backend.watchAllClients(list=>{Ctx.team=new Map(list.filter(c=>!c.demo).map(c=>[c.id+"@"+c._owner,c]));Ctx.teamReady=true;renderAll()},err=>{console.error(err);toast((err&&String(err.code).includes("failed-precondition"))?"團隊後台需要建立資料庫索引，請參考 README 常見問題":errMsg(err,"讀取團隊名單失敗"));Ctx.teamReady=true;renderAll()});
   }
   S.grade="all";S.stage=S.source=S.need=S.disc=S.q="";$("#q").value="";["#fStage","#fSource","#fNeed","#fDisc"].forEach(s=>$(s).value="");
   [...$("#gradeSeg").children].forEach(x=>x.setAttribute("aria-pressed",x.dataset.g==="all"));
   window.scrollTo(0,0);renderAll();
+}
+// 主管：逐一訂閱每位下線的名單（權限規則只開放自己的下線）
+function syncTeamSubs(){
+  const want=new Set(Ctx.downline.map(u=>u.id));
+  Object.keys(Ctx.subs).filter(k=>k.startsWith("tc:")).forEach(k=>{const id=k.slice(3);if(!want.has(id)){stopSub(k);Ctx.teamLoaded.delete(id);for(const [key,c] of Ctx.team)if(c._owner===id)Ctx.team.delete(key)}});
+  want.forEach(id=>{
+    if(Ctx.subs["tc:"+id])return;
+    Ctx.subs["tc:"+id]=backend.watchUserClients(id,list=>{
+      for(const [key,c] of Ctx.team)if(c._owner===id)Ctx.team.delete(key);
+      list.filter(c=>!c.demo).forEach(c=>Ctx.team.set(c.id+"@"+id,c));
+      Ctx.teamLoaded.add(id);Ctx.teamReady=[...want].every(x=>Ctx.teamLoaded.has(x));renderAll();
+    },err=>{console.warn(err);Ctx.teamLoaded.add(id);Ctx.teamReady=[...want].every(x=>Ctx.teamLoaded.has(x));renderAll()});
+  });
+  Ctx.teamReady=[...want].every(x=>Ctx.teamLoaded.has(x));
 }
 $("#modeSeg").addEventListener("click",e=>{const b=e.target.closest("button[data-mode]");if(b)setMode(b.dataset.mode)});
 $("#btnBack").addEventListener("click",()=>setMode("team"));
@@ -226,7 +262,7 @@ document.querySelectorAll("#personal .tab").forEach(t=>t.addEventListener("click
 $("#btnNew").addEventListener("click",()=>openNew());
 $("#btnImport").addEventListener("click",openImport);
 $("#btnExport").addEventListener("click",()=>exportClients(items(),Ctx.mode==="advisor"?`${userName(userById(Ctx.viewUid))}_客戶名單`:"我的客戶名單",false));
-$("#btnTeamExport").addEventListener("click",()=>exportClients([...Ctx.team.values()],"全團隊客戶名單",true));
+$("#btnTeamExport").addEventListener("click",()=>exportClients([...Ctx.team.values()],Ctx.admin?"全團隊客戶名單":"我的團隊客戶名單",true));
 $("#teamQ").addEventListener("input",e=>{S.teamQ=e.target.value.trim().toLowerCase();renderTeam()});
 $("#showDisabled").addEventListener("change",e=>{S.showDisabled=e.target.checked;renderTeam()});
 $("#userChip").addEventListener("click",openProfileEdit);
@@ -236,9 +272,9 @@ function renderHeader(){
   const p=Ctx.profile||{},u=Ctx.user||{};
   const name=p.displayName||u.displayName||u.email||"";
   const photo=p.photoURL||u.photoURL;
-  $("#userChip").innerHTML=`<span class="avatar">${photo?`<img src="${esc(photo)}" alt="" referrerpolicy="no-referrer">`:esc((name||"?").slice(0,1))}</span><span class="uname">${esc(name)}</span>${Ctx.admin?'<span class="role">管理員</span>':""}`;
-  $("#modeSeg").hidden=!Ctx.admin;
-  const pend=Ctx.users.filter(x=>x.status==="pending").length;
+  $("#userChip").innerHTML=`<span class="avatar">${photo?`<img src="${esc(photo)}" alt="" referrerpolicy="no-referrer">`:esc((name||"?").slice(0,1))}</span><span class="uname">${esc(name)}</span>${Ctx.admin?'<span class="role">管理員</span>':Ctx.manager?'<span class="role">主管</span>':""}`;
+  $("#modeSeg").hidden=!(Ctx.admin||Ctx.manager);
+  const pend=Ctx.admin?Ctx.users.filter(x=>x.status==="pending").length:0;
   [...$("#modeSeg").children].forEach(b=>{b.setAttribute("aria-pressed",b.dataset.mode===Ctx.mode||(b.dataset.mode==="team"&&Ctx.mode==="advisor"))});
   $("#pendDot").hidden=!pend;$("#pendDot").textContent=pend;
   $("#mineActions").hidden=Ctx.mode!=="mine";
@@ -336,14 +372,33 @@ document.addEventListener("click",e=>{
   const card=e.target.closest(".card[data-id], .alist button[data-id]");
   if(card){openClient(card.dataset.id,"ins");return}
   const row=e.target.closest("tr[data-uid]");
-  if(row&&!e.target.closest("button")){setMode("advisor",row.dataset.uid);return}
+  if(row&&!e.target.closest("button,select,label")){setMode("advisor",row.dataset.uid);return}
   const a=e.target.closest("[data-act]");if(!a)return;
   const act=a.dataset.act;
   if(act==="new")openNew();else if(act==="import")openImport();else if(act==="demo")loadDemo();else if(act==="cleardemo")clearDemo();
-  else if(act==="approve"||act==="enable")setStatus(a.dataset.uid,"active",act==="approve"?"已開通":"已恢復");
+  else if(act==="approve"){const sel=document.querySelector(`select[data-pend-mgr="${a.dataset.uid}"]`);approveUser(a.dataset.uid,sel?sel.value:"")}
+  else if(act==="enable")setStatus(a.dataset.uid,"active","已恢復");
+  else if(act==="mkadmin"){const u=userById(a.dataset.uid);showConfirm(`將「${userName(u)}」設為管理員？`,"管理員可以看到全部業務的名單，也能開通、停用帳號與調整組織。","設為管理員",async()=>{try{await backend.addAdmin(a.dataset.uid);toast("已設為管理員")}catch(e){toast(errMsg(e,"設定失敗"))}})}
+  else if(act==="rmadmin"){const u=userById(a.dataset.uid);showConfirm(`取消「${userName(u)}」的管理員權限？`,"取消後，對方只能看到自己的名單，以及他在組織中的下線。","取消管理員",async()=>{try{await backend.removeAdmin(a.dataset.uid);toast("已取消管理員")}catch(e){toast(errMsg(e,"設定失敗"))}},true)}
+  else if(act==="orgnode"){const id=a.dataset.uid;if(id===me()&&!Ctx.admin)setMode("mine");else setMode("advisor",id)}
   else if(act==="reject"||act==="disable"){const u=userById(a.dataset.uid);showConfirm(act==="reject"?`拒絕「${userName(u)}」的申請？`:`停用「${userName(u)}」？`,act==="reject"?"對方將無法使用系統。之後仍可在「顯示已停用帳號」中恢復。":"停用後對方無法登入使用名單，但他建立的名單會保留，你仍可在後台檢視與匯出。","確認",()=>setStatus(a.dataset.uid,"disabled",act==="reject"?"已拒絕":"已停用"),true)}
   else if(act==="view")setMode("advisor",a.dataset.uid);
 });
+document.addEventListener("change",e=>{const s=e.target.closest("select[data-org]");if(s)applyOrg(s.dataset.org,s.value)});
+async function approveUser(id,mgr){
+  try{await backend.setStatus(id,"active");if(mgr)await applyOrg(id,mgr,true);toast(mgr?"已開通並指派主管":"已開通")}catch(e){toast(errMsg(e,"開通失敗"))}
+}
+// 指派直屬主管，並重新計算受影響者的整條上線鏈
+async function applyOrg(target,newMgr,quiet){
+  const mgrOf=Object.fromEntries(Ctx.users.map(u=>[u.id,u.managerUid||""]));
+  mgrOf[target]=newMgr||"";
+  for(let x=newMgr,g=0;x&&g<50;g++,x=mgrOf[x])if(x===target){toast("不能把主管設為自己或自己的下線");renderTeam();return false}
+  const chain=id=>{const out=[];let m=mgrOf[id],g=0;while(m&&g++<50&&!out.includes(m)){out.push(m);m=mgrOf[m]}return out};
+  const todo=Ctx.users.filter(u=>u.id===target||JSON.stringify(chain(u.id))!==JSON.stringify(arr(u.managers)));
+  try{for(const u of todo)await backend.setOrg(u.id,mgrOf[u.id]||null,chain(u.id));if(!quiet)toast("已更新組織")}
+  catch(e){toast(errMsg(e,"更新組織失敗"));return false}
+  return true;
+}
 async function setStatus(id,st,msg){try{await backend.setStatus(id,st);toast(msg)}catch(e){toast(errMsg(e,"更新失敗"))}}
 
 /* ---------- render: actions ---------- */
@@ -386,7 +441,7 @@ function renderView(){
 
 /* ---------- render: team back office ---------- */
 function advisorStats(uidv){
-  const l=[...Ctx.team.values()].filter(c=>c._owner===uidv);
+  const l=clientsOf(uidv);
   const g={S:0,A:0,B:0,C:0,"":0};l.forEach(c=>g[gradeOf(c)]++);
   const wk=ymd(new Date(Date.now()-7*864e5));
   let logs7=0,last="";
@@ -397,30 +452,74 @@ function advisorStats(uidv){
     won:l.filter(c=>c.stage==="won"||c.stage==="referral").length,
     sa:g.S+g.A,logs7,last};
 }
+const avatarHtml=u=>`<span class="avatar">${u&&u.photoURL?`<img src="${esc(u.photoURL)}" alt="" referrerpolicy="no-referrer">`:esc(userName(u).slice(0,1))}</span>`;
+function mgrOptions(forUid,current){
+  // 可選的直屬主管：已開通、非本人、非本人的下線
+  const mgrOf=Object.fromEntries(Ctx.users.map(u=>[u.id,u.managerUid||""]));
+  const isDesc=id=>{for(let x=id,g=0;x&&g<50;g++){x=mgrOf[x];if(x===forUid)return true}return false};
+  const opts=Ctx.users.filter(u=>u.status==="active"&&u.id!==forUid&&!isDesc(u.id)).sort((a,b)=>userName(a).localeCompare(userName(b),"zh-Hant"));
+  return `<option value="">（未指定）</option>`+opts.map(u=>`<option value="${esc(u.id)}" ${u.id===current?"selected":""}>${esc(userName(u))}</option>`).join("");
+}
+function renderOrg(){
+  const isAdm=Ctx.admin;
+  const users=Ctx.users.filter(u=>u.status==="active"||(u.id===me()));
+  const ids=new Set(users.map(u=>u.id));
+  const kids={};users.forEach(u=>{const m=u.managerUid;if(m&&ids.has(m)&&m!==u.id)(kids[m]=kids[m]||[]).push(u)});
+  Object.values(kids).forEach(l=>l.sort((a,b)=>(kids[b.id]?1:0)-(kids[a.id]?1:0)||userName(a).localeCompare(userName(b),"zh-Hant")));
+  const teamCount=id=>(kids[id]||[]).reduce((n,k)=>n+1+teamCount(k.id),0);
+  const teamClients=id=>(kids[id]||[]).reduce((n,k)=>n+clientsOf(k.id).length+teamClients(k.id),0);
+  const node=(u,depth)=>{
+    const s=advisorStats(u.id);const k=kids[u.id]||[];
+    const tags=[u.id===me()?'<em class="tg you">你</em>':"",isAdminUid(u.id)?'<em class="tg adm">管理員</em>':"",k.length?'<em class="tg mgr">主管</em>':""].join("");
+    const team=k.length?`<span class="ot">團隊 ${teamCount(u.id)} 人 ・ 名單 ${s.n+teamClients(u.id)} 位</span>`:"";
+    return `<li><button type="button" class="onode" data-act="orgnode" data-uid="${esc(u.id)}">${avatarHtml(u)}<span class="on"><span class="nm">${esc(userName(u))}${tags}</span><span class="os num">名單 ${s.n} ・ S/A ${s.sa}${s.over?` ・ <b class="bad">逾期 ${s.over}</b>`:""}</span>${team}</span></button>${k.length?`<ul>${k.map(c=>node(c,depth+1)).join("")}</ul>`:""}</li>`;
+  };
+  let roots,loose=[];
+  if(isAdm){
+    const top=users.filter(u=>!u.managerUid||!ids.has(u.managerUid));
+    roots=top.filter(u=>kids[u.id]||isAdminUid(u.id));
+    loose=top.filter(u=>!kids[u.id]&&!isAdminUid(u.id));
+  }else roots=[selfUser()];
+  const loading=!Ctx.usersReady;
+  $("#orgTree").innerHTML=loading?`<p class="sub">載入中…</p>`:
+    (roots.length?`<ul class="tree">${roots.map(r=>node(r,0)).join("")}</ul>`:"")+
+    (loose.length?`<div class="loose"><div class="lh">尚未指定主管 ・ ${loose.length} 位<span>在下方表格「直屬主管」欄指派</span></div><ul class="tree flat">${loose.map(u=>node(u,0)).join("")}</ul></div>`:"")+
+    (!roots.length&&!loose.length?`<p class="sub">目前沒有組織資料。</p>`:"");
+}
 function renderTeam(){
-  const users=Ctx.users;
-  const pending=users.filter(u=>u.status==="pending").sort((a,b)=>(tsDate(a.createdAt)||0)-(tsDate(b.createdAt)||0));
+  const isAdm=Ctx.admin;
+  const users=isAdm?Ctx.users:Ctx.downline;
+  const pending=isAdm?users.filter(u=>u.status==="pending").sort((a,b)=>(tsDate(a.createdAt)||0)-(tsDate(b.createdAt)||0)):[];
   const active=users.filter(u=>u.status==="active");
   const all=[...Ctx.team.values()];
   const over=all.filter(c=>isActiveStage(c)&&c.nextDate&&dayDiff(c.nextDate)<0).length;
   const sa=all.filter(c=>["S","A"].includes(gradeOf(c))).length;
   const loading=!Ctx.teamReady||!Ctx.usersReady;
+  const wk7=ymd(new Date(Date.now()-7*864e5));const logs7=all.reduce((n,c)=>n+arr(c.logs).filter(x=>(x.d||"")>=wk7).length,0);
+  $("#teamTitle").textContent=isAdm?"業務名單狀況":"我的團隊名單狀況";
+  $("#teamExportLbl").textContent=isAdm?"匯出全團隊 Excel":"匯出我的團隊 Excel";
+  $("#teamDesc").textContent=isAdm?"點選任一位業務，以唯讀模式查看他的名單、經營建議與跟進紀錄。示範資料不列入統計。":"只顯示你組織下的業務。點選任一位，以唯讀模式查看他的名單與跟進紀錄。";
   $("#teamSummary").innerHTML=`
-    <div class="stat"><div class="k">已開通業務</div><div class="v num">${active.length}<small>位</small></div></div>
+    <div class="stat"><div class="k">${isAdm?"已開通業務":"團隊業務"}</div><div class="v num">${active.length}<small>位</small></div></div>
     <div class="stat"><div class="k">團隊名單總數</div><div class="v num">${loading?"–":all.length}<small>位</small></div></div>
     <div class="stat"><div class="k">S／A 級名單</div><div class="v num">${loading?"–":sa}<small>位</small></div></div>
     <div class="stat"><div class="k">逾期未聯絡</div><div class="v num ${over?"alert":""}">${loading?"–":over}<small>位</small></div></div>
-    <div class="stat"><div class="k">待開通申請</div><div class="v num ${pending.length?"alert":""}">${pending.length}<small>位</small></div></div>`;
+    ${isAdm?`<div class="stat"><div class="k">待開通申請</div><div class="v num ${pending.length?"alert":""}">${pending.length}<small>位</small></div></div>`:`<div class="stat"><div class="k">近 7 天跟進</div><div class="v num">${loading?"–":logs7}<small>筆</small></div></div>`}`;
   $("#pendPanel").hidden=!pending.length;
-  $("#pendList").innerHTML=pending.map(u=>`<li><span class="avatar">${u.photoURL?`<img src="${esc(u.photoURL)}" alt="" referrerpolicy="no-referrer">`:esc(userName(u).slice(0,1))}</span><span class="an">${esc(userName(u))}<small>${esc(u.email||"")} ・ 申請於 ${fmtDate(u.createdAt)}</small></span><span class="pend-act"><button class="btn" type="button" data-act="reject" data-uid="${esc(u.id)}">拒絕</button><button class="btn primary" type="button" data-act="approve" data-uid="${esc(u.id)}">開通</button></span></li>`).join("");
+  $("#pendList").innerHTML=pending.map(u=>`<li>${avatarHtml(u)}<span class="an">${esc(userName(u))}<small>${esc(u.email||"")} ・ 申請於 ${fmtDate(u.createdAt)}</small></span><label class="pend-mgr">直屬主管<select class="sel" data-pend-mgr="${esc(u.id)}">${mgrOptions(u.id,"")}</select></label><span class="pend-act"><button class="btn" type="button" data-act="reject" data-uid="${esc(u.id)}">拒絕</button><button class="btn primary" type="button" data-act="approve" data-uid="${esc(u.id)}">開通</button></span></li>`).join("");
+  renderOrg();
   let rows=users.filter(u=>u.status==="active"||(S.showDisabled&&u.status==="disabled"));
   if(S.teamQ)rows=rows.filter(u=>(userName(u)+" "+(u.email||"")).toLowerCase().includes(S.teamQ));
   const st=Object.fromEntries(rows.map(u=>[u.id,advisorStats(u.id)]));
   rows.sort((a,b)=>(a.status===b.status?0:a.status==="active"?-1:1)||st[b.id].n-st[a.id].n);
   const wk=d=>{if(!d)return '<span class="muted">尚無</span>';const days=Math.floor((Date.now()-new Date(d))/864e5);return days<=0?"今天":days+" 天前"};
   $("#teamBody").innerHTML=rows.length?rows.map(u=>{const s=st[u.id];const stale=s.last&&(Date.now()-new Date(s.last))/864e5>14;
+    const mgrCell=isAdm?`<select class="sel sm" data-org="${esc(u.id)}" aria-label="直屬主管">${mgrOptions(u.id,u.managerUid||"")}</select>`:esc(u.managerUid===me()?"你":userName(userById(u.managerUid)));
+    const adminBtn=!isAdm||u.id===me()||u.status!=="active"||isOwnerUid(u.id)?"":isAdminUid(u.id)?`<button class="btn ghost sm" type="button" data-act="rmadmin" data-uid="${esc(u.id)}">取消管理員</button>`:`<button class="btn ghost sm" type="button" data-act="mkadmin" data-uid="${esc(u.id)}">設為管理員</button>`;
+    const statusBtn=!isAdm?"":u.status==="disabled"?`<button class="btn ghost sm" type="button" data-act="enable" data-uid="${esc(u.id)}">恢復</button>`:(u.id!==me()&&!isOwnerUid(u.id)?`<button class="btn ghost sm" type="button" data-act="disable" data-uid="${esc(u.id)}">停用</button>`:"");
     return `<tr data-uid="${esc(u.id)}" class="${u.status==="disabled"?"off":""}">
-      <td><div class="tname"><span class="avatar">${u.photoURL?`<img src="${esc(u.photoURL)}" alt="" referrerpolicy="no-referrer">`:esc(userName(u).slice(0,1))}</span><span>${esc(userName(u))}${u.id===Ctx.user.uid?' <em class="you">你</em>':""}<small>${esc(u.email||"")}</small></span></div></td>
+      <td><div class="tname">${avatarHtml(u)}<span>${esc(userName(u))}${u.id===me()?' <em class="you">你</em>':""}${isAdminUid(u.id)?' <em class="you">管理員</em>':""}<small>${esc(u.email||"")}</small></span></div></td>
+      <td class="mgrcol">${mgrCell}</td>
       <td class="num r"><b>${s.n}</b></td>
       <td><div class="mini">${s.n?["S","A","B","C"].map(k=>s.g[k]?`<span style="flex:${s.g[k]};background:var(--g${k})"></span>`:"").join("")+(s.g[""]?`<span style="flex:${s.g[""]};background:var(--line-2)"></span>`:""):""}</div><div class="mini-l num">S ${s.g.S} ・ A ${s.g.A} ・ B ${s.g.B} ・ C ${s.g.C}</div></td>
       <td class="num r ${s.over?"bad":""}">${s.over}</td>
@@ -428,8 +527,8 @@ function renderTeam(){
       <td class="num r">${s.won}</td>
       <td class="num r">${s.logs7}</td>
       <td class="${stale?"bad":""}">${wk(s.last)}</td>
-      <td class="r nowrap">${u.status==="disabled"?`<button class="btn ghost sm" type="button" data-act="enable" data-uid="${esc(u.id)}">恢復</button>`:(u.id!==Ctx.user.uid?`<button class="btn ghost sm" type="button" data-act="disable" data-uid="${esc(u.id)}">停用</button>`:"")}<button class="btn sm" type="button" data-act="view" data-uid="${esc(u.id)}">查看名單</button></td>
-    </tr>`}).join(""):`<tr><td colspan="9" class="empty-row">${loading?"載入中…":"目前沒有已開通的業務。業務用 Google 帳號登入後，會出現在上方「待開通」。"}</td></tr>`;
+      <td class="r nowrap">${adminBtn}${statusBtn}<button class="btn sm" type="button" data-act="view" data-uid="${esc(u.id)}">查看名單</button></td>
+    </tr>`}).join(""):`<tr><td colspan="10" class="empty-row">${loading?"載入中…":isAdm?"目前沒有已開通的業務。業務用 Google 帳號登入後，會出現在上方「待開通」。":"目前沒有指派到你組織下的業務。"}</td></tr>`;
 }
 
 /* ---------- insights engine ---------- */
