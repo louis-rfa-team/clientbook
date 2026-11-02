@@ -5,16 +5,21 @@ import { TEAM } from "./config.js";
 /* ---------- option dictionaries ---------- */
 const SOURCES=[["A","親戚"],["B","朋友"],["C","鄉親"],["D","同好"],["E","消費"],["F","社團"],["G","同事"],["H","同學"],["I","老師"],["J","轉介"],["K","網路客"],["L","陌生開發"]];
 const SRC=Object.fromEntries(SOURCES);
+// 名單評分規則（2026/11 版）：六項加總滿分 100；房產不計分，有房在分級後加「+」
+// dflt＝不清楚時先算的分數；req＝新增客戶必填（交情、接近難易度未填則「待評」）
 const SCORE={
-  income:{label:"每月收入",opts:["2萬以下","2–4萬","4–7萬","7–10萬","10萬以上"],pts:[0,10,15,20,25]},
-  age:{label:"年齡",opts:["25歲以下","26–35歲","36–45歲","46歲以上"],pts:[5,10,10,5]},
-  marital:{label:"婚姻",opts:["單身","交往中","已婚無子女","已婚有子女"],pts:[5,10,10,15]},
-  property:{label:"房產",opts:["無房產","2年內購入","持有2–5年","持有5–10年","持有10年以上"],pts:[0,5,10,15,20]},
-  contact:{label:"一年內聯絡（交情）",opts:["2次以下・不熟","3–7次・普通","7–11次・好朋友","12次以上・麻吉"],pts:[5,10,15,20]},
-  approach:{label:"接近難易度",opts:["幾乎不可能","有點難","容易","非常容易"],pts:[0,5,10,15]}
+  age:{label:"年齡",opts:["25歲以下","26–35歲","36–45歲","46歲以上"],pts:[10,15,15,20],dflt:15},
+  income:{label:"每月收入",opts:["2萬以下","2–4萬","4–7萬","7–10萬","10萬以上"],pts:[0,5,10,15,20],dflt:10},
+  approach:{label:"接近難易度",opts:["幾乎不可能","有點難","容易","非常容易"],pts:[0,10,15,20],req:true},
+  contact:{label:"一年內聯絡（交情）",opts:["2次以下・不熟","3–7次・普通","7–11次・好朋友","12次以上・麻吉"],pts:[0,5,10,15],req:true},
+  attitude:{label:"對保險的態度",opts:["排斥保險","中立觀望","認同規劃"],pts:[-15,5,15],dflt:5,str:true},
+  marital:{label:"婚姻",opts:["單身","交往中","已婚無子女","已婚有子女"],pts:[5,5,10,10],dflt:5}
 };
-const SCORE_KEYS=["income","age","marital","property","contact","approach"];
-const MAX_SCORE=105;
+const SCORE_KEYS=["age","income","approach","contact","attitude","marital"];
+const PROPERTY={label:"房產",opts:["無房產","2年內購入","持有2–5年","持有5–10年","持有10年以上"]};
+const IDX_KEYS=["age","income","approach","contact","marital","property"]; // 以選項序號儲存的欄位
+const idxDef=k=>k==="property"?PROPERTY:(SCORE[k]&&!SCORE[k].str?SCORE[k]:null);
+const MAX_SCORE=100;
 const STAGES=[
   {k:"lead",t:"名單",c:"var(--muted)",b:"var(--surface-2)"},
   {k:"touched",t:"已聯繫",c:"var(--gB)",b:"var(--surface-2)"},
@@ -37,10 +42,8 @@ const P={
   invest:["以存款為主","基金","股票／ETF","房地產","外幣","保單"],
   risk:["保守","穩健","積極"],
   needs:["退休規劃","醫療保障","子女教育金","房貸壓力","房產活化","資產傳承／節稅","收入不穩","存不了錢","保單健檢","創業／轉職"],
-  disc:["D 主導型","I 社交型","S 穩健型","C 分析型"],
   decision:["自己決定","與配偶討論","需家人同意","依賴專業建議"],
   focus:["價格","保障完整","服務與信任","資產成長"],
-  attitude:["排斥保險","中立觀望","認同規劃","已有信任顧問"],
   channel:["LINE","電話","面談","簡訊"],
   timeslot:["平日白天","平日晚上","假日"],
   hobbies:["運動健身","旅遊","美食","親子","投資理財","宗教","寵物","藝文","汽車","3C 科技","登山露營","公益"],
@@ -73,8 +76,24 @@ const ICON={
 
 function ageOf(c){const d=parseD(c.birthday);if(!d)return null;const t=new Date();let a=t.getFullYear()-d.getFullYear();if(t.getMonth()<d.getMonth()||(t.getMonth()===d.getMonth()&&t.getDate()<d.getDate()))a--;return a>=0&&a<120?a:null}
 function ageBand(c){const a=ageOf(c);if(a!=null)return a<=25?0:a<=35?1:a<=45?2:3;return isNum(c.age)?c.age:null}
-function scoreOf(c){let s=0,filled=0;for(const k of SCORE_KEYS){const i=k==="age"?ageBand(c):c[k];if(isNum(i)&&SCORE[k].pts[i]!=null){s+=SCORE[k].pts[i];filled++}}return {score:s,filled}}
-function gradeOf(c){const {score,filled}=scoreOf(c);if(filled===0||score===0)return "";return score>94?"S":score>=75?"A":score>=60?"B":"C"}
+const ATT_IDX={"排斥保險":0,"中立觀望":1,"認同規劃":2,"已有信任顧問":1}; // 舊選項「已有信任顧問」算中立
+function idxOf(c,k){
+  if(k==="age")return ageBand(c);
+  if(k==="attitude"){const i=ATT_IDX[c.attitude];return i==null?null:i}
+  const v=c[k];return isNum(v)&&SCORE[k].pts[v]!=null?v:null;
+}
+function scoreOf(c){
+  let s=0,filled=0;
+  for(const k of SCORE_KEYS){const i=idxOf(c,k);if(i!=null){s+=SCORE[k].pts[i];filled++}else if(SCORE[k].dflt!=null)s+=SCORE[k].dflt}
+  const pending=idxOf(c,"contact")==null||idxOf(c,"approach")==null;
+  return {score:pending?0:s,filled,pending,tent:!pending&&filled<SCORE_KEYS.length};
+}
+function gradeOf(c){const {score,pending}=scoreOf(c);if(pending)return "";return score>=85?"S":score>=70?"A":score>=55?"B":"C"}
+const hasHouse=c=>isNum(c.property)&&c.property>=1;
+const gradeLabel=c=>{const g=gradeOf(c);return g?g+(hasHouse(c)?"+":""):"待評"};
+function gradeBadge(c,id){const sc=scoreOf(c);const g=gradeOf(c);const plus=!!g&&hasHouse(c);
+  return `<div class="grade${sc.tent?" tent":""}${plus?" plus":""}" data-g="${g}"${id?` id="${id}"`:""} title="${sc.pending?"交情或接近難易度未填":sc.tent?`暫定：六項已填 ${sc.filled} 項`:""}">${esc(gradeLabel(c))}</div>`}
+function scoreNote(sc){return sc.pending?`待評 ${sc.filled}/6`:sc.tent?`暫定 ${sc.filled}/6`:`/ ${MAX_SCORE}`}
 function daysToBirthday(c){const d=parseD(c.birthday);if(!d)return null;const t=parseD(today());let n=new Date(t.getFullYear(),d.getMonth(),d.getDate());if(n<t)n=new Date(t.getFullYear()+1,d.getMonth(),d.getDate());return Math.round((n-t)/864e5)}
 const isActiveStage=c=>!["won","hold"].includes(c.stage);
 
@@ -127,7 +146,7 @@ function errMsg(e,prefix){
 }
 
 /* ---------- UI state ---------- */
-const S={view:"list",q:"",grade:"all",stage:"",source:"",need:"",disc:"",sort:"score",openId:null,dTab:"ins",draft:null,dirty:false,isNew:false,teamQ:"",showDisabled:false};
+const S={view:"list",q:"",grade:"all",stage:"",source:"",need:"",sort:"score",openId:null,dTab:"ins",draft:null,dirty:false,isNew:false,teamQ:"",showDisabled:false};
 try{const r=JSON.parse(localStorage.getItem("clientbook.ui")||"{}");if(r.sort)S.sort=r.sort;if(r.view)S.view=r.view}catch(e){}
 function rememberUI(){try{localStorage.setItem("clientbook.ui",JSON.stringify({sort:S.sort,view:S.view}))}catch(e){}}
 
@@ -226,7 +245,7 @@ function setMode(mode,viewUid){
   if(mode!=="mine"&&Ctx.admin&&!Ctx.subs.team){
     Ctx.subs.team=backend.watchAllClients(list=>{Ctx.team=new Map(list.filter(c=>!c.demo).map(c=>[c.id+"@"+c._owner,c]));Ctx.teamReady=true;renderAll()},err=>{console.error(err);toast((err&&String(err.code).includes("failed-precondition"))?"團隊後台需要建立資料庫索引，請參考 README 常見問題":errMsg(err,"讀取團隊名單失敗"));Ctx.teamReady=true;renderAll()});
   }
-  S.grade="all";S.stage=S.source=S.need=S.disc=S.q="";$("#q").value="";["#fStage","#fSource","#fNeed","#fDisc"].forEach(s=>$(s).value="");
+  S.grade="all";S.stage=S.source=S.need=S.q="";$("#q").value="";["#fStage","#fSource","#fNeed"].forEach(s=>$(s).value="");
   [...$("#gradeSeg").children].forEach(x=>x.setAttribute("aria-pressed",x.dataset.g==="all"));
   window.scrollTo(0,0);renderAll();
 }
@@ -252,12 +271,11 @@ function fillSelect(el,first,list){el.innerHTML=`<option value="">${first}</opti
 fillSelect($("#fStage"),"全部階段",STAGES.map(s=>[s.k,s.t]));
 fillSelect($("#fSource"),"全部來源",SOURCES.map(([k,t])=>[k,k+" "+t]));
 fillSelect($("#fNeed"),"全部需求",P.needs.map(n=>[n,n]));
-fillSelect($("#fDisc"),"全部個性",P.disc.map(n=>[n,n]));
 $("#fSort").value=S.sort;
-$("#gradeSeg").innerHTML=[["all","全部"],["S","S"],["A","A"],["B","B"],["C","C"],["none","未評"]].map(([v,t])=>`<button type="button" data-g="${v}" aria-pressed="${v===S.grade}">${t}</button>`).join("");
+$("#gradeSeg").innerHTML=[["all","全部"],["S","S"],["A","A"],["B","B"],["C","C"],["none","待評"]].map(([v,t])=>`<button type="button" data-g="${v}" aria-pressed="${v===S.grade}">${t}</button>`).join("");
 $("#gradeSeg").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;S.grade=b.dataset.g;[...$("#gradeSeg").children].forEach(x=>x.setAttribute("aria-pressed",x===b));renderList()});
 $("#q").addEventListener("input",e=>{S.q=e.target.value.trim().toLowerCase();renderList()});
-[["#fStage","stage"],["#fSource","source"],["#fNeed","need"],["#fDisc","disc"],["#fSort","sort"]].forEach(([s,k])=>$(s).addEventListener("change",e=>{S[k]=e.target.value;if(k==="sort")rememberUI();renderList()}));
+[["#fStage","stage"],["#fSource","source"],["#fNeed","need"],["#fSort","sort"]].forEach(([s,k])=>$(s).addEventListener("change",e=>{S[k]=e.target.value;if(k==="sort")rememberUI();renderList()}));
 document.querySelectorAll("#personal .tab").forEach(t=>t.addEventListener("click",()=>{S.view=t.dataset.view;rememberUI();renderView()}));
 $("#btnNew").addEventListener("click",()=>openNew());
 $("#btnImport").addEventListener("click",openImport);
@@ -303,7 +321,7 @@ function renderSummary(){
   $("#summary").innerHTML=`
     <div class="stat"><div class="k">名單總數 ・ 分級分佈</div><div class="v num">${n}<small>位</small></div>
       <div class="dist">${seg("S")}${seg("A")}${seg("B")}${seg("C")}</div>
-      <div class="dist-legend"><span><b style="color:var(--gS)">${g.S}</b>S</span><span><b style="color:var(--gA)">${g.A}</b>A</span><span><b style="color:var(--gB)">${g.B}</b>B</span><span><b style="color:var(--gC)">${g.C}</b>C</span>${g[""]?`<span><b>${g[""]}</b>未評</span>`:""}</div></div>
+      <div class="dist-legend"><span><b style="color:var(--gS)">${g.S}</b>S</span><span><b style="color:var(--gA)">${g.A}</b>A</span><span><b style="color:var(--gB)">${g.B}</b>B</span><span><b style="color:var(--gC)">${g.C}</b>C</span>${g[""]?`<span><b>${g[""]}</b>待評</span>`:""}</div></div>
     <div class="stat"><div class="k">7 天內待跟進</div><div class="v num">${due}<small>位</small></div>${due?'<button type="button" class="stat-link" data-jump="due">查看名單 ›</button>':""}</div>
     <div class="stat"><div class="k">已逾期未聯絡</div><div class="v num ${over?"alert":""}">${over}<small>位</small></div>${over?'<button type="button" class="stat-link" data-jump="due">查看名單 ›</button>':""}</div>
     <div class="stat"><div class="k">30 天內壽星</div><div class="v num">${bd}<small>位</small></div>${bd?'<button type="button" class="stat-link" data-jump="bday">查看名單 ›</button>':""}</div>
@@ -318,10 +336,9 @@ function filtered(){
   if(S.stage)list=list.filter(c=>(c.stage||"lead")===S.stage);
   if(S.source)list=list.filter(c=>c.source===S.source);
   if(S.need)list=list.filter(c=>arr(c.needs).includes(S.need));
-  if(S.disc)list=list.filter(c=>c.disc===S.disc);
   if(S.q){list=list.filter(c=>[c.name,c.job,c.jobCat,c.jobOther,c.area,c.note,c.referrer,arr(c.tags).join(" "),arr(c.needs).join(" "),arr(c.hobbies).join(" ")].join(" ").toLowerCase().includes(S.q))}
   const by={
-    score:(a,b)=>scoreOf(b).score-scoreOf(a).score||(a.no||0)-(b.no||0),
+    score:(a,b)=>{const x=scoreOf(a),y=scoreOf(b);return (x.pending-y.pending)||y.score-x.score||hasHouse(b)-hasHouse(a)||(a.no||0)-(b.no||0)},
     next:(a,b)=>(a.nextDate||"9999")<(b.nextDate||"9999")?-1:(a.nextDate||"9999")>(b.nextDate||"9999")?1:0,
     updated:(a,b)=>(b.updatedAt||"")<(a.updatedAt||"")?-1:1,
     no:(a,b)=>(a.no||0)-(b.no||0)
@@ -338,18 +355,17 @@ function stageHtml(k){const s=STG[k||"lead"]||STG.lead;return `<span class="stag
 function metaLine(c){const a=ageOf(c);return [c.source?`${c.source} ${SRC[c.source]||""}`:"",a!=null?a+"歲":(isNum(c.age)?SCORE.age.opts[c.age]:""),c.job||jobCatLabel(c),c.area||""].filter(Boolean).join(" ・ ")}
 function keyOf(c){return Ctx.mode==="advisor"?c.id+"@"+c._owner:c.id}
 function cardHtml(c){
-  const g=gradeOf(c);const {score}=scoreOf(c);
+  const sc=scoreOf(c);const score=sc.score;
   const needs=arr(c.needs).slice(0,3).map(n=>`<span class="pill need">${esc(n)}</span>`).join("");
-  const disc=c.disc?`<span class="pill disc">${esc(c.disc)}</span>`:"";
   const tags=arr(c.tags).slice(0,3).map(t=>`<span class="pill tag">${esc(t)}</span>`).join("");
   return `<button type="button" class="card" data-id="${esc(keyOf(c))}">
     <div class="card-head">
-      <div class="grade" data-g="${g}">${g||"未評"}</div>
+      ${gradeBadge(c)}
       <div class="who"><div class="name">${esc(c.name||"（未命名）")}<span class="no">No.${esc(c.no||"-")}</span>${c.demo?'<span class="demo-flag">示範</span>':""}</div><div class="meta">${esc(metaLine(c))||"&nbsp;"}</div></div>
-      <div class="score"><b class="num">${score}</b><span>/ ${MAX_SCORE}</span></div>
+      <div class="score ${sc.pending?"pend":""}"><b class="num">${sc.pending?"–":score}</b><span>${scoreNote(sc)}</span></div>
     </div>
-    <div class="bar"><i style="width:${Math.min(100,score/MAX_SCORE*100)}%"></i></div>
-    ${(needs||disc||tags)?`<div class="chips">${disc}${needs}${tags}</div>`:""}
+    <div class="bar"><i style="width:${Math.max(0,Math.min(100,score/MAX_SCORE*100))}%"></i></div>
+    ${(needs||tags)?`<div class="chips">${needs}${tags}</div>`:""}
     <div class="card-foot">${stageHtml(c.stage)}${dueHtml(c)}</div>
   </button>`;
 }
@@ -423,8 +439,6 @@ function renderAna(){
   $("#anaStage").innerHTML=st.map(x=>`<div class="hbar"><span>${x.t}</span><span class="t"><i style="width:${x.n/ms*100}%"></i></span><span class="c">${x.n}</span></div>`).join("");
   const nd=P.needs.map(n=>({t:n,n:all.filter(c=>arr(c.needs).includes(n)).length})).filter(x=>x.n).sort((a,b)=>b.n-a.n);const mn=Math.max(1,...nd.map(x=>x.n));
   $("#anaNeed").innerHTML=nd.length?nd.map(x=>`<div class="hbar"><span>${x.t}</span><span class="t"><i style="width:${x.n/mn*100}%;background:var(--gold-2)"></i></span><span class="c">${x.n}</span></div>`).join(""):`<p class="sub">尚未標記需求</p>`;
-  const dc=P.disc.map(n=>({t:n,n:all.filter(c=>c.disc===n).length}));const md=Math.max(1,...dc.map(x=>x.n));
-  $("#anaDisc").innerHTML=dc.map(x=>`<div class="hbar"><span>${x.t}</span><span class="t"><i style="width:${x.n/md*100}%;background:var(--navy)"></i></span><span class="c">${x.n}</span></div>`).join("");
 }
 document.addEventListener("click",e=>{
   const j=e.target.closest("[data-jump]");if(!j)return;
@@ -532,12 +546,6 @@ function renderTeam(){
 }
 
 /* ---------- insights engine ---------- */
-const DISC_TIP={
-  "D 主導型":["先講結論與數字","開場直接說明這次能幫他解決什麼，準備 2–3 個方案讓他自己選。會面控制在 30 分鐘內，避免冗長鋪陳。"],
-  "I 社交型":["先聊人，再聊數字","從生活、興趣切入建立好感，用真實案例故事說明。會後用 LINE 傳一頁重點，避免他熱度過後忘記細節。"],
-  "S 穩健型":["放慢節奏，不催促","強調穩定、家人保障與長期陪伴。分多次接觸累積信任，給他時間和家人商量，不要當場要求決定。"],
-  "C 分析型":["準備完整的試算依據","帶齊條款、費率與情境試算表，數字要經得起追問。給他比較的時間，事後主動提供補充資料。"]
-};
 const DECISION_TIP={
   "與配偶討論":"下次面談邀請配偶一起出席，避免一方轉述失真。",
   "需家人同意":"準備一頁式摘要讓他帶回給家人看，必要時安排家庭說明。",
@@ -568,8 +576,6 @@ function insights(c){
   if(c.contact===0)out.push(["交情","warn","交情尚淺，先暖身","一年聯絡不到 2 次，先恢復互動（節日問候、分享財經解讀），3 次接觸後再提約訪。"]);
   if(c.approach===0)out.push(["接近度","warn","接觸難度高，放長線","目前幾乎不可能約到，先維持關懷與內容分享，等待生活事件（換工作、結婚、買房）再切入。"]);
   if(c.attitude==="排斥保險")out.push(["態度","warn","避免一開始談商品","以財務規劃與觀念分享為主，先提供價值，讓他主動問。"]);
-  if(c.attitude==="已有信任顧問")out.push(["態度","","定位成第二意見","不批評既有規劃，以保單健檢、資產整理的角度提供客觀參考。"]);
-  if(c.disc&&DISC_TIP[c.disc])out.push(["溝通",""].concat(DISC_TIP[c.disc]));
   if(c.decision&&DECISION_TIP[c.decision])out.push(["決策","","決策方式："+c.decision,DECISION_TIP[c.decision]]);
   arr(c.needs).filter(n=>NEED_HOOK[n]).slice(0,3).forEach(n=>out.push(["切入點","",n,NEED_HOOK[n]]));
   if(isNum(c.property)&&c.property>=3&&(ageForSeg||0)>=40&&!arr(c.needs).includes("房產活化"))out.push(["機會","","可評估房產活化","持有房產 5 年以上且年齡 40+，若有退休現金流需求，可試算房產活化情境。"]);
@@ -597,11 +603,11 @@ $("#scrim").addEventListener("click",()=>closeDrawer());
 document.addEventListener("keydown",e=>{if(e.key==="Escape"){if($("#modalRoot").firstChild){$("#modalRoot").innerHTML="";return}if($("#drawer").classList.contains("on"))closeDrawer()}});
 
 function renderHead(){
-  const c=S.draft;const g=gradeOf(c);const {score,filled}=scoreOf(c);const ro=readOnly();
+  const c=S.draft;const sc=scoreOf(c);const ro=readOnly();
   const tabs=[!S.isNew&&["ins","經營建議"],!ro&&["edit","客戶資料"],!S.isNew&&["log",`跟進紀錄<span class="cnt">${arr(c.logs).length}</span>`]].filter(Boolean);
-  $("#dHead").innerHTML=`<div class="d-top"><div class="grade" data-g="${g}" id="dGrade">${g||"未評"}</div>
+  $("#dHead").innerHTML=`<div class="d-top">${gradeBadge(c,"dGrade")}
     <div style="min-width:0;flex:1"><h2>${esc(c.name||(S.isNew?"新增客戶":"（未命名）"))}</h2><div class="meta">${esc(metaLine(c))||"No."+c.no}</div></div>
-    <div class="score"><b class="num" id="dScore">${score}</b><span id="dFilled">${filled}/6 項已評</span></div>
+    <div class="score"><b class="num" id="dScore">${sc.pending?"–":sc.score}</b><span id="dFilled">${headNote(sc)}</span></div>
     <button class="btn ghost d-close" type="button" id="dClose" aria-label="關閉">${ICON.close}</button></div>
     <div class="d-tabs tabs">${tabs.map(([k,t])=>`<button class="tab" type="button" data-dt="${k}" aria-selected="${S.dTab===k}">${t}</button>`).join("")}</div>`;
   $("#dClose").onclick=()=>closeDrawer();
@@ -609,7 +615,8 @@ function renderHead(){
     if(S.dirty&&b.dataset.dt!=="edit"){showConfirm("尚未儲存的修改","切換分頁前要先儲存嗎？","儲存並切換",async()=>{if(await saveDraft())openClient(S.openId,b.dataset.dt)});return}
     S.dTab=b.dataset.dt;renderDrawer()});
 }
-function liveHead(){const c=S.draft;const g=gradeOf(c);const {score,filled}=scoreOf(c);const ge=$("#dGrade");ge.dataset.g=g;ge.textContent=g||"未評";$("#dScore").textContent=score;$("#dFilled").textContent=filled+"/6 項已評"}
+function headNote(sc){return sc.pending?`待評 ・ ${sc.filled}/6 項`:sc.tent?`暫定 ・ ${sc.filled}/6 項`:"6/6 項已評"}
+function liveHead(){const c=S.draft;const sc=scoreOf(c);$("#dGrade").outerHTML=gradeBadge(c,"dGrade");$("#dScore").textContent=sc.pending?"–":sc.score;$("#dFilled").textContent=headNote(sc)}
 function renderDrawer(){
   if(!S.draft)return;
   if(!S.isNew&&S.openId&&!S.dirty){const fresh=itemsMap().get(S.openId);if(fresh)S.draft=JSON.parse(JSON.stringify(fresh))}
@@ -627,27 +634,31 @@ function renderDrawer(){
 }
 function insHtml(c){
   const I=insights(c);
-  const bd=SCORE_KEYS.map(k=>{const i=k==="age"?ageBand(c):c[k];const ok=isNum(i);return `<div class="bd ${ok?"":"miss"}"><span class="p">${ok?SCORE[k].pts[i]:"–"}</span><div class="k">${SCORE[k].label.replace("（交情）","")}</div><div class="v">${ok?SCORE[k].opts[i]:"未填"}</div></div>`}).join("");
-  const tips=I.tips.length?I.tips.map(([l,cls,h,p])=>`<div class="tip ${cls}"><span class="lbl">${esc(l)}</span><h5>${esc(h)}</h5><p>${esc(p)}</p></div>`).join(""):`<div class="tip"><span class="lbl">提示</span><h5>補上客戶習性</h5><p>在「客戶資料」填入個性類型、決策方式與需求，這裡會產生具體的接觸建議。</p></div>`;
+  const bd=SCORE_KEYS.map(k=>{const d=SCORE[k];const i=idxOf(c,k);const ok=i!=null;
+    return `<div class="bd ${ok?"":d.req?"miss":"guess"}"><span class="p">${ok?d.pts[i]:d.req?"–":d.dflt}</span><div class="k">${d.label.replace("（交情）","").replace("一年內聯絡","交情")}</div><div class="v">${ok?d.opts[i]:d.req?"未填・待評":"不清楚・先算"}</div></div>`}).join("")
+    +`<div class="bd bd-prop"><span class="p">${hasHouse(c)?"+":"–"}</span><div class="k">房產（不計分）</div><div class="v">${isNum(c.property)?PROPERTY.opts[c.property]+(hasHouse(c)?"・分級加「+」":""):"未填"}</div></div>`;
+  const tips=I.tips.length?I.tips.map(([l,cls,h,p])=>`<div class="tip ${cls}"><span class="lbl">${esc(l)}</span><h5>${esc(h)}</h5><p>${esc(p)}</p></div>`).join(""):`<div class="tip"><span class="lbl">提示</span><h5>補上客戶習性</h5><p>在「客戶資料」填入決策方式、需求與聯絡偏好，這裡會產生具體的接觸建議。</p></div>`;
   const row=(k,v)=>v&&(Array.isArray(v)?v.length:true)?`<dt>${k}</dt><dd>${esc(Array.isArray(v)?v.join("、"):v)}</dd>`:"";
-  const prof=[row("經營階段",(STG[c.stage||"lead"]||{}).t),row("名單來源",c.source?c.source+" "+SRC[c.source]+(c.referrer?`（${c.referrer} 介紹）`:""):""),row("生日",c.birthday),row("職業",[jobCatLabel(c),c.job].filter(Boolean).join("・")),row("居住區域",c.area),row("電話",c.phone),row("LINE",c.line),row("子女",c.kids),row("扶養父母",c.parents),row("收入型態",c.incomeType),row("房貸狀態",c.loan),row("既有保單",c.policies),row("理財經驗",c.invest),row("風險屬性",c.risk),row("最在意",c.focus),row("對保險態度",c.attitude),row("增員潛力",c.recruit),row("Hashtag",c.tags),row("備註",c.note)].join("");
+  const prof=[row("經營階段",(STG[c.stage||"lead"]||{}).t),row("名單來源",c.source?c.source+" "+SRC[c.source]+(c.referrer?`（${c.referrer} 介紹）`:""):""),row("生日",c.birthday),row("職業",[jobCatLabel(c),c.job].filter(Boolean).join("・")),row("居住區域",c.area),row("電話",c.phone),row("LINE",c.line),row("子女",c.kids),row("扶養父母",c.parents),row("收入型態",c.incomeType),row("房貸狀態",c.loan),row("既有保單",c.policies),row("理財經驗",c.invest),row("風險屬性",c.risk),row("最在意",c.focus),row("增員潛力",c.recruit),row("Hashtag",c.tags),row("備註",c.note)].join("");
   return `<div class="ins-hero"><div class="eyebrow">服務主軸</div><div class="seg-name">${esc(I.segName)}</div><p>${esc(I.segText)}</p><div class="breakdown">${bd}</div></div>
     <div class="tips">${tips}</div>
     <div class="sec" style="margin-top:14px;padding-bottom:14px"><div class="sec-h"><h4>客戶輪廓</h4><span>${c.demo?"示範資料":""}</span></div><dl class="kv">${prof||'<dt>—</dt><dd>尚無資料</dd>'}</dl></div>`;
 }
 
 /* form */
-function optGroup(key,list,{multi=false,scored=null}={}){
+function optGroup(key,list,{multi=false,scored=null,idx=false}={}){
   const v=S.draft[key];
   return `<div class="opts" data-key="${key}" data-multi="${multi?1:0}">${list.map((o,i)=>{
-    const val=scored?i:o;const on=multi?arr(v).includes(val):v===val;
-    return `<button type="button" class="opt ${scored?"scored":""}" data-v="${esc(String(val))}" aria-pressed="${on}">${esc(o)}${scored?`<small>${scored[i]}分</small>`:""}</button>`}).join("")}</div>`;
+    const val=(idx||(scored&&IDX_KEYS.includes(key)))?i:o;const on=multi?arr(v).includes(val):v===val;
+    return `<button type="button" class="opt ${scored?"scored":""}" data-v="${esc(String(val))}" aria-pressed="${on}">${esc(o)}${scored?`<small>${scored[i]>0?scored[i]:scored[i]<0?"−"+(-scored[i]):0}分</small>`:""}</button>`}).join("")}</div>`;
 }
 function scoreField(k){
   const s=SCORE[k];
-  if(k==="age"){const a=ageOf(S.draft);return `<div class="field" id="ageField"><div class="lab">${s.label}<em>${a!=null?`依生日自動計算：${a} 歲`:"或填生日自動計算"}</em></div>${a!=null?`<div class="opts">${s.opts.map((o,i)=>`<span class="opt scored" aria-pressed="${ageBand(S.draft)===i}" style="cursor:default">${o}<small>${s.pts[i]}分</small></span>`).join("")}</div>`:optGroup("age",s.opts,{scored:s.pts})}</div>`}
-  return `<div class="field"><div class="lab">${s.label}</div>${optGroup(k,s.opts,{scored:s.pts})}</div>`;
+  const note=s.req?`<em class="req">${S.isNew?"必填":"未填會顯示待評"}</em>`:`<em>不清楚可留空，先算 ${s.dflt} 分</em>`;
+  if(k==="age"){const a=ageOf(S.draft);return `<div class="field" id="ageField"><div class="lab">${s.label}<em>${a!=null?`依生日自動計算：${a} 歲`:"或填生日自動計算；不清楚先算 15 分"}</em></div>${a!=null?`<div class="opts">${s.opts.map((o,i)=>`<span class="opt scored" aria-pressed="${ageBand(S.draft)===i}" style="cursor:default">${o}<small>${s.pts[i]}分</small></span>`).join("")}</div>`:optGroup("age",s.opts,{scored:s.pts})}</div>`}
+  return `<div class="field" data-sf="${k}"><div class="lab">${s.label}${note}</div>${optGroup(k,s.opts,{scored:s.pts})}</div>`;
 }
+const propField=()=>`<div class="field"><div class="lab">${PROPERTY.label}<em>不計分・有房產會在分級後加「+」</em></div>${optGroup("property",PROPERTY.opts,{idx:true})}</div>`;
 function renderForm(){
   const c=S.draft;
   const f=(label,inner,cls="")=>`<div class="field ${cls}"><div class="lab">${label}</div>${inner}</div>`;
@@ -663,8 +674,9 @@ function renderForm(){
     ${f("名單來源",`<div class="opts" data-key="source" data-multi="0">${SOURCES.map(([k,t])=>`<button type="button" class="opt" data-v="${k}" aria-pressed="${c.source===k}">${k} ${t}</button>`).join("")}</div>`)}
     <div class="f2">${f("介紹人",inp("referrer","text","轉介紹來源（選填）"))}${f("增員潛力",optGroup("recruit",P.recruit))}</div>
   </div>
-  <div class="sec"><div class="sec-h"><h4>名單評分</h4><span>沿用原 Excel 六大指標・滿分 105</span></div>
+  <div class="sec"><div class="sec-h"><h4>名單評分</h4><span>六項加總・滿分 100・S 85／A 70／B 55</span></div>
     ${SCORE_KEYS.map(scoreField).join("")}
+    ${propField()}
   </div>
   <div class="sec"><div class="sec-h"><h4>家庭與財務</h4><span>不計分・用於需求分析</span></div>
     ${f("子女階段（可複選）",optGroup("kids",P.kids,{multi:true}))}
@@ -679,10 +691,8 @@ function renderForm(){
     ${f("需求（可複選）",optGroup("needs",P.needs,{multi:true}))}
   </div>
   <div class="sec"><div class="sec-h"><h4>個性與溝通習性</h4><span>業務觀察紀錄</span></div>
-    ${f("個性類型（DISC）",optGroup("disc",P.disc)+`<div class="hint">D 果斷重效率 ・ I 熱情愛交流 ・ S 溫和重安全感 ・ C 謹慎重細節</div>`)}
     ${f("決策方式",optGroup("decision",P.decision))}
     ${f("最在意",optGroup("focus",P.focus))}
-    ${f("對保險態度",optGroup("attitude",P.attitude))}
     ${f("偏好聯絡管道（可複選）",optGroup("channel",P.channel,{multi:true}))}
     ${f("方便聯絡時段（可複選）",optGroup("timeslot",P.timeslot,{multi:true}))}
     ${f("興趣嗜好（可複選）",optGroup("hobbies",P.hobbies,{multi:true}))}
@@ -706,7 +716,7 @@ $("#dBody").addEventListener("click",e=>{
   if(t){const tags=arr(S.draft.tags).slice();const v=t.dataset.tag;const i=tags.indexOf(v);i>=0?tags.splice(i,1):tags.push(v);S.draft.tags=tags;$("#f-tags").value=tags.join(" ");t.setAttribute("aria-pressed",i<0);S.dirty=true;return}
   const b=e.target.closest("button.opt");if(!b)return;
   const g=b.closest(".opts");const key=g.dataset.key;const multi=g.dataset.multi==="1";
-  let v=b.dataset.v;if(SCORE[key])v=+v;
+  let v=b.dataset.v;if(IDX_KEYS.includes(key))v=+v;
   if(multi){const a=arr(S.draft[key]).slice();const i=a.indexOf(v);i>=0?a.splice(i,1):a.push(v);S.draft[key]=a;b.setAttribute("aria-pressed",i<0)}
   else{const on=S.draft[key]===v;S.draft[key]=on?null:v;g.querySelectorAll(".opt").forEach(x=>x.setAttribute("aria-pressed",!on&&x===b));
     if(key==="jobCat"){const jo=$("#f-jobOther");if(jo){jo.hidden=S.draft.jobCat!=="其他";if(!jo.hidden)jo.focus()}}}
@@ -725,6 +735,8 @@ $("#dBody").addEventListener("change",e=>{const el=e.target.closest("[data-in]")
 async function saveDraft(){
   const c=S.draft;c.name=(c.name||"").trim();
   if(!c.name){toast("請先填寫客戶姓名");const n=$("#f-name");if(n)n.focus();return false}
+  if(S.isNew){const miss=["contact","approach"].filter(k=>idxOf(c,k)==null);
+    if(miss.length){toast("新增客戶請先選擇「"+miss.map(k=>k==="contact"?"一年內聯絡（交情）":"接近難易度").join("」和「")+"」");const el=document.querySelector(`[data-sf="${miss[0]}"]`);if(el){el.scrollIntoView({block:"center"});el.classList.remove("need");void el.offsetWidth;el.classList.add("need")}return false}}
   if(ageOf(c)!=null)c.age=ageBand(c);
   if(c.jobCat!=="其他")delete c.jobOther;else c.jobOther=(c.jobOther||"").trim();
   const btn=$("#btnSave");if(btn){btn.disabled=true;btn.textContent="儲存中…"}
@@ -827,7 +839,7 @@ function parseTemplate(rows){
   }
   return out;
 }
-const FLAT=[["編號","no"],["姓名","name"],["經營階段","stage"],["來源","source"],["介紹人","referrer"],["生日","birthday"],["性別","gender"],["職業類別","jobCat"],["職業","job"],["居住區域","area"],["電話","phone"],["LINE","line"],["每月收入","income"],["年齡","age"],["婚姻","marital"],["房產","property"],["交情","contact"],["接近難易度","approach"],["分數","_score"],["分級","_grade"],["子女階段","kids"],["扶養父母","parents"],["收入型態","incomeType"],["房貸狀態","loan"],["既有保單","policies"],["理財經驗","invest"],["風險屬性","risk"],["需求","needs"],["個性類型","disc"],["決策方式","decision"],["最在意","focus"],["對保險態度","attitude"],["聯絡管道","channel"],["聯絡時段","timeslot"],["興趣嗜好","hobbies"],["增員潛力","recruit"],["Hashtag","tags"],["下次聯絡日","nextDate"],["最近聯絡","lastContact"],["備註","note"],["跟進紀錄","_logs"]];
+const FLAT=[["編號","no"],["姓名","name"],["經營階段","stage"],["來源","source"],["介紹人","referrer"],["生日","birthday"],["性別","gender"],["職業類別","jobCat"],["職業","job"],["居住區域","area"],["電話","phone"],["LINE","line"],["每月收入","income"],["年齡","age"],["婚姻","marital"],["房產","property"],["交情","contact"],["接近難易度","approach"],["對保險態度","attitude"],["分數","_score"],["分級","_grade"],["子女階段","kids"],["扶養父母","parents"],["收入型態","incomeType"],["房貸狀態","loan"],["既有保單","policies"],["理財經驗","invest"],["風險屬性","risk"],["需求","needs"],["決策方式","decision"],["最在意","focus"],["聯絡管道","channel"],["聯絡時段","timeslot"],["興趣嗜好","hobbies"],["增員潛力","recruit"],["Hashtag","tags"],["下次聯絡日","nextDate"],["最近聯絡","lastContact"],["備註","note"],["跟進紀錄","_logs"]];
 const MULTI=["kids","incomeType","policies","invest","needs","channel","timeslot","hobbies","tags"];
 function parseFlat(objs){
   const out=[];let base=nextNo();
@@ -835,7 +847,8 @@ function parseFlat(objs){
     const name=String(o["姓名"]||"").trim();if(!name)return;
     const c=blank();c.no=++base;
     FLAT.forEach(([h,k])=>{let v=o[h];if(v===""||v==null||k.startsWith("_"))return;
-      if(SCORE[k]){const i=SCORE[k].opts.indexOf(String(v));if(i>=0)c[k]=i}
+      if(idxDef(k)){const i=idxDef(k).opts.indexOf(String(v));if(i>=0)c[k]=i}
+      else if(k==="attitude"){const t=String(v).trim();if(ATT_IDX[t]!=null)c.attitude=SCORE.attitude.opts[ATT_IDX[t]]}
       else if(MULTI.includes(k))c[k]=String(v).split(/[、,，]\s*|\s+(?=#)/).map(s=>s.trim()).filter(Boolean);
       else if(k==="jobCat"){const t=String(v).trim();if(P.jobCat.includes(t))c.jobCat=t;else{c.jobCat="其他";c.jobOther=t}}
       else if(k==="stage"){const s=STAGES.find(s=>s.t===String(v));c.stage=s?s.k:"lead"}
@@ -861,10 +874,11 @@ function exportClients(list,label,withOwner){
   list=list.slice().sort((a,b)=>withOwner?(userName(userById(a._owner)).localeCompare(userName(userById(b._owner)),"zh-Hant")||(a.no||0)-(b.no||0)):(a.no||0)-(b.no||0));
   const rows=list.map(c=>{const o={};if(withOwner){const u=userById(c._owner);o["負責業務"]=userName(u);o["業務 Email"]=u&&u.email||""}
     const sc=scoreOf(c);FLAT.forEach(([h,k])=>{let v=c[k];
-    if(k==="_score")v=sc.score;else if(k==="_grade")v=gradeOf(c);
+    if(k==="_score")v=sc.pending?"":sc.score;else if(k==="_grade")v=gradeLabel(c)+(sc.tent?`（暫定 ${sc.filled}/6）`:"");
     else if(k==="_logs")v=arr(c.logs).slice().sort((a,b)=>a.d<b.d?-1:1).map(l=>`${l.d} ${l.t}：${l.x}`).join("\n");
     else if(k==="age"){const i=ageBand(c);v=isNum(i)?SCORE.age.opts[i]:""}
-    else if(SCORE[k])v=isNum(v)?SCORE[k].opts[v]:"";
+    else if(idxDef(k))v=isNum(v)?idxDef(k).opts[v]:"";
+    else if(k==="attitude"){const i=ATT_IDX[v];v=i==null?"":SCORE.attitude.opts[i]}
     else if(k==="jobCat")v=jobCatLabel(c);
     else if(k==="stage")v=(STG[v||"lead"]||STG.lead).t;
     else if(k==="source")v=v?v+" "+SRC[v]:"";
@@ -885,12 +899,12 @@ function bdayIn(n,age){const d=new Date();d.setDate(d.getDate()+n);d.setFullYear
 async function loadDemo(){
   let base=nextNo();
   const D=[
-    {name:"陳志明（示範）",source:"B",birthday:bdayIn(120,48),gender:"男",jobCat:"企業主",job:"五金行老闆",area:"北屯區",income:4,marital:3,property:4,contact:3,approach:3,kids:["大學"],parents:"部分分擔",incomeType:["自營收入","租金收入"],loan:"已還清",policies:["醫療／意外","壽險"],invest:["房地產","股票／ETF"],risk:"穩健",needs:["退休規劃","房產活化","資產傳承／節稅"],disc:"D 主導型",decision:"自己決定",focus:"資產成長",attitude:"認同規劃",channel:["LINE","面談"],timeslot:["平日晚上"],hobbies:["登山露營","汽車"],recruit:"無",stage:"proposal",nextDate:shiftDate(2),tags:["#朋友多","#有影響力"],note:"名下兩戶，一戶自住一戶出租。希望 60 歲退休後每月有穩定現金流。"},
-    {name:"林怡君（示範）",source:"G",birthday:bdayIn(9,33),gender:"女",jobCat:"上班族",job:"科技業 PM",area:"西屯區",income:3,marital:3,property:1,contact:2,approach:2,kids:["學齡前"],parents:"無需扶養",incomeType:["固定薪資","業績獎金"],loan:"寬限期中",policies:["僅公司團保"],invest:["基金","以存款為主"],risk:"穩健",needs:["子女教育金","房貸壓力","醫療保障"],disc:"C 分析型",decision:"與配偶討論",focus:"保障完整",attitude:"中立觀望",channel:["LINE"],timeslot:["平日晚上","假日"],hobbies:["親子","美食"],recruit:"無",stage:"met",nextDate:shiftDate(-3),tags:["#愛家","#精打細算"]},
-    {name:"黃建宏（示範）",source:"H",birthday:bdayIn(200,27),gender:"男",jobCat:"業務",job:"汽車業務",area:"南屯區",income:2,marital:1,property:0,contact:2,approach:3,parents:"無需扶養",incomeType:["業績獎金"],loan:"無房貸",policies:["醫療／意外"],invest:["股票／ETF"],risk:"積極",needs:["存不了錢","收入不穩","創業／轉職"],disc:"I 社交型",decision:"自己決定",focus:"資產成長",attitude:"認同規劃",channel:["LINE","電話"],timeslot:["平日晚上"],hobbies:["運動健身","3C 科技"],recruit:"有興趣",stage:"booked",nextDate:shiftDate(5),tags:["#話題王"]},
-    {name:"張淑芬（示範）",source:"A",birthday:bdayIn(22,58),gender:"女",jobCat:"軍公教",job:"國小老師",area:"烏日區",income:2,marital:3,property:4,contact:1,approach:2,kids:["已就業"],parents:"主要扶養",incomeType:["固定薪資"],loan:"已還清",policies:["壽險","儲蓄險"],invest:["以存款為主"],risk:"保守",needs:["醫療保障","退休規劃","保單健檢"],disc:"S 穩健型",decision:"需家人同意",focus:"服務與信任",attitude:"已有信任顧問",channel:["電話","面談"],timeslot:["假日"],hobbies:["宗教","藝文"],recruit:"無",stage:"touched",tags:["#孝順"]},
-    {name:"吳家豪（示範）",source:"K",birthday:bdayIn(300,38),gender:"男",jobCat:"專業人士",job:"牙醫師",area:"西區",income:4,marital:2,property:2,contact:0,approach:1,parents:"部分分擔",incomeType:["固定薪資","投資收益"],loan:"房貸還款中",policies:["醫療／意外","投資型"],invest:["股票／ETF","外幣","基金"],risk:"積極",needs:["資產傳承／節稅","退休規劃"],disc:"C 分析型",decision:"依賴專業建議",focus:"資產成長",attitude:"中立觀望",channel:["LINE"],timeslot:["平日白天"],hobbies:["旅遊","投資理財"],recruit:"無",stage:"lead",tags:["#好工作"]},
-    {name:"劉美玲（示範）",source:"L",birthday:bdayIn(90,44),gender:"女",jobCat:"家管",area:"大里區",income:1,marital:3,property:3,contact:0,approach:0,kids:["國高中"],loan:"房貸還款中",policies:["尚無保單"],invest:["以存款為主"],risk:"保守",needs:["子女教育金"],disc:"S 穩健型",decision:"與配偶討論",focus:"價格",attitude:"排斥保險",channel:["簡訊"],timeslot:["平日白天"],hobbies:["親子","寵物"],recruit:"可觀察",stage:"hold",tags:["#精打細算"]}
+    {name:"陳志明（示範）",source:"B",birthday:bdayIn(120,48),gender:"男",jobCat:"企業主",job:"五金行老闆",area:"北屯區",income:4,marital:3,property:4,contact:3,approach:3,kids:["大學"],parents:"部分分擔",incomeType:["自營收入","租金收入"],loan:"已還清",policies:["醫療／意外","壽險"],invest:["房地產","股票／ETF"],risk:"穩健",needs:["退休規劃","房產活化","資產傳承／節稅"],decision:"自己決定",focus:"資產成長",attitude:"認同規劃",channel:["LINE","面談"],timeslot:["平日晚上"],hobbies:["登山露營","汽車"],recruit:"無",stage:"proposal",nextDate:shiftDate(2),tags:["#朋友多","#有影響力"],note:"名下兩戶，一戶自住一戶出租。希望 60 歲退休後每月有穩定現金流。"},
+    {name:"林怡君（示範）",source:"G",birthday:bdayIn(9,33),gender:"女",jobCat:"上班族",job:"科技業 PM",area:"西屯區",income:3,marital:3,property:1,contact:2,approach:2,kids:["學齡前"],parents:"無需扶養",incomeType:["固定薪資","業績獎金"],loan:"寬限期中",policies:["僅公司團保"],invest:["基金","以存款為主"],risk:"穩健",needs:["子女教育金","房貸壓力","醫療保障"],decision:"與配偶討論",focus:"保障完整",attitude:"中立觀望",channel:["LINE"],timeslot:["平日晚上","假日"],hobbies:["親子","美食"],recruit:"無",stage:"met",nextDate:shiftDate(-3),tags:["#愛家","#精打細算"]},
+    {name:"黃建宏（示範）",source:"H",birthday:bdayIn(200,27),gender:"男",jobCat:"業務",job:"汽車業務",area:"南屯區",income:2,marital:1,property:0,contact:2,approach:3,parents:"無需扶養",incomeType:["業績獎金"],loan:"無房貸",policies:["醫療／意外"],invest:["股票／ETF"],risk:"積極",needs:["存不了錢","收入不穩","創業／轉職"],decision:"自己決定",focus:"資產成長",attitude:"認同規劃",channel:["LINE","電話"],timeslot:["平日晚上"],hobbies:["運動健身","3C 科技"],recruit:"有興趣",stage:"booked",nextDate:shiftDate(5),tags:["#話題王"]},
+    {name:"張淑芬（示範）",source:"A",birthday:bdayIn(22,58),gender:"女",jobCat:"軍公教",job:"國小老師",area:"烏日區",income:2,marital:3,property:4,contact:1,approach:2,kids:["已就業"],parents:"主要扶養",incomeType:["固定薪資"],loan:"已還清",policies:["壽險","儲蓄險"],invest:["以存款為主"],risk:"保守",needs:["醫療保障","退休規劃","保單健檢"],decision:"需家人同意",focus:"服務與信任",attitude:"中立觀望",channel:["電話","面談"],timeslot:["假日"],hobbies:["宗教","藝文"],recruit:"無",stage:"touched",tags:["#孝順"]},
+    {name:"吳家豪（示範）",source:"K",birthday:bdayIn(300,38),gender:"男",jobCat:"專業人士",job:"牙醫師",area:"西區",income:4,marital:2,property:2,contact:0,approach:1,parents:"部分分擔",incomeType:["固定薪資","投資收益"],loan:"房貸還款中",policies:["醫療／意外","投資型"],invest:["股票／ETF","外幣","基金"],risk:"積極",needs:["資產傳承／節稅","退休規劃"],decision:"依賴專業建議",focus:"資產成長",attitude:"中立觀望",channel:["LINE"],timeslot:["平日白天"],hobbies:["旅遊","投資理財"],recruit:"無",stage:"lead",tags:["#好工作"]},
+    {name:"劉美玲（示範）",source:"L",birthday:bdayIn(90,44),gender:"女",jobCat:"家管",area:"大里區",income:1,marital:3,property:3,contact:0,approach:0,kids:["國高中"],loan:"房貸還款中",policies:["尚無保單"],invest:["以存款為主"],risk:"保守",needs:["子女教育金"],decision:"與配偶討論",focus:"價格",attitude:"排斥保險",channel:["簡訊"],timeslot:["平日白天"],hobbies:["親子","寵物"],recruit:"可觀察",stage:"hold",tags:["#精打細算"]}
   ];
   for(const d of D){const c=Object.assign(blank(),d,{no:++base,demo:true,updatedAt:new Date().toISOString()});c.age=ageBand(c);c.logs=d.stage==="lead"||d.stage==="hold"?[]:[{id:uid(),d:shiftDate(-10),t:"面談",x:"示範紀錄：初次面談，了解家庭結構與目前保單。"}];try{await backend.saveClient(Ctx.user.uid,c)}catch(e){toast(errMsg(e,"載入失敗"));return}}
   toast("已載入 6 筆示範名單");
