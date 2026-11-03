@@ -62,6 +62,12 @@ const today=()=>ymd(new Date());
 const parseD=s=>{if(!s)return null;const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(s);return m?new Date(+m[1],+m[2]-1,+m[3]):null};
 const dayDiff=s=>{const d=parseD(s);if(!d)return null;const t=parseD(today());return Math.round((d-t)/864e5)};
 const uid=()=>"c"+Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+// 由地址推出居住區域：台中市各區直接對應，其他縣市歸「外縣市」
+function areaFromAddr(a){
+  a=String(a||"").replace(/\s+/g,"").replace(/臺/g,"台");if(!a)return "";
+  const m=/^台中市?(.{1,3}?區)/.exec(a);if(m&&AREAS.includes(m[1]))return m[1];
+  return /^(台北|新北|桃園|台南|高雄|基隆|新竹|苗栗|彰化|南投|雲林|嘉義|屏東|宜蘭|花蓮|台東|澎湖|金門|連江)/.test(a)?"外縣市":"";
+}
 const jobCatLabel=c=>c.jobCat==="其他"&&c.jobOther?c.jobOther:(c.jobCat||"");
 const isNum=v=>typeof v==="number"&&!isNaN(v);
 const arr=v=>Array.isArray(v)?v:[];
@@ -336,7 +342,7 @@ function filtered(){
   if(S.stage)list=list.filter(c=>(c.stage||"lead")===S.stage);
   if(S.source)list=list.filter(c=>c.source===S.source);
   if(S.need)list=list.filter(c=>arr(c.needs).includes(S.need));
-  if(S.q){list=list.filter(c=>[c.name,c.job,c.jobCat,c.jobOther,c.area,c.note,c.referrer,arr(c.tags).join(" "),arr(c.needs).join(" "),arr(c.hobbies).join(" ")].join(" ").toLowerCase().includes(S.q))}
+  if(S.q){list=list.filter(c=>[c.name,c.job,c.jobCat,c.jobOther,c.area,c.address,c.phone,c.note,c.referrer,arr(c.tags).join(" "),arr(c.needs).join(" "),arr(c.hobbies).join(" ")].join(" ").toLowerCase().includes(S.q))}
   const by={
     score:(a,b)=>{const x=scoreOf(a),y=scoreOf(b);return (x.pending-y.pending)||y.score-x.score||hasHouse(b)-hasHouse(a)||(a.no||0)-(b.no||0)},
     next:(a,b)=>(a.nextDate||"9999")<(b.nextDate||"9999")?-1:(a.nextDate||"9999")>(b.nextDate||"9999")?1:0,
@@ -639,7 +645,7 @@ function insHtml(c){
     +`<div class="bd bd-prop"><span class="p">${hasHouse(c)?"+":"–"}</span><div class="k">房產（不計分）</div><div class="v">${isNum(c.property)?PROPERTY.opts[c.property]+(hasHouse(c)?"・分級加「+」":""):"未填"}</div></div>`;
   const tips=I.tips.length?I.tips.map(([l,cls,h,p])=>`<div class="tip ${cls}"><span class="lbl">${esc(l)}</span><h5>${esc(h)}</h5><p>${esc(p)}</p></div>`).join(""):`<div class="tip"><span class="lbl">提示</span><h5>補上客戶習性</h5><p>在「客戶資料」填入決策方式、需求與聯絡偏好，這裡會產生具體的接觸建議。</p></div>`;
   const row=(k,v)=>v&&(Array.isArray(v)?v.length:true)?`<dt>${k}</dt><dd>${esc(Array.isArray(v)?v.join("、"):v)}</dd>`:"";
-  const prof=[row("經營階段",(STG[c.stage||"lead"]||{}).t),row("名單來源",c.source?c.source+" "+SRC[c.source]+(c.referrer?`（${c.referrer} 介紹）`:""):""),row("生日",c.birthday),row("職業",[jobCatLabel(c),c.job].filter(Boolean).join("・")),row("居住區域",c.area),row("電話",c.phone),row("LINE",c.line),row("子女",c.kids),row("扶養父母",c.parents),row("收入型態",c.incomeType),row("房貸狀態",c.loan),row("既有保單",c.policies),row("理財經驗",c.invest),row("風險屬性",c.risk),row("最在意",c.focus),row("增員潛力",c.recruit),row("Hashtag",c.tags),row("備註",c.note)].join("");
+  const prof=[row("經營階段",(STG[c.stage||"lead"]||{}).t),row("名單來源",c.source?c.source+" "+SRC[c.source]+(c.referrer?`（${c.referrer} 介紹）`:""):""),row("生日",c.birthday),row("職業",[jobCatLabel(c),c.job].filter(Boolean).join("・")),row("居住區域",c.area),row("地址",c.address),row("電話",c.phone),row("LINE",c.line),row("子女",c.kids),row("扶養父母",c.parents),row("收入型態",c.incomeType),row("房貸狀態",c.loan),row("既有保單",c.policies),row("理財經驗",c.invest),row("風險屬性",c.risk),row("最在意",c.focus),row("增員潛力",c.recruit),row("Hashtag",c.tags),row("備註",c.note)].join("");
   return `<div class="ins-hero"><div class="eyebrow">服務主軸</div><div class="seg-name">${esc(I.segName)}</div><p>${esc(I.segText)}</p><div class="breakdown">${bd}</div></div>
     <div class="tips">${tips}</div>
     <div class="sec" style="margin-top:14px;padding-bottom:14px"><div class="sec-h"><h4>客戶輪廓</h4><span>${c.demo?"示範資料":""}</span></div><dl class="kv">${prof||'<dt>—</dt><dd>尚無資料</dd>'}</dl></div>`;
@@ -669,6 +675,7 @@ function renderForm(){
     ${f("生日",inp("birthday","date"))}${f("下次聯絡日",inp("nextDate","date"))}
     ${f("電話",inp("phone","tel","09xx-xxx-xxx"))}${f("LINE ID",inp("line","text",""))}
     ${f("職業（細項）",inp("job","text","例：國中老師、牙醫、餐廳老闆"))}${f("居住區域",inp("area","text","例：北屯區","list=\"areaList\""))}</div>
+    ${f("地址",inp("address","text","例：台中市北屯區文心路四段81號"))}
     ${f("性別",optGroup("gender",P.gender))}
     ${f("職業類別",optGroup("jobCat",P.jobCat)+`<input class="inp" id="f-jobOther" data-in="jobOther" type="text" value="${esc(c.jobOther||"")}" placeholder="請輸入職業類別，例如：農漁業、宗教人員、自由接案" style="margin-top:8px" ${c.jobCat==="其他"?"":"hidden"}>`)}
     ${f("名單來源",`<div class="opts" data-key="source" data-multi="0">${SOURCES.map(([k,t])=>`<button type="button" class="opt" data-v="${k}" aria-pressed="${c.source===k}">${k} ${t}</button>`).join("")}</div>`)}
@@ -738,6 +745,8 @@ async function saveDraft(){
   if(S.isNew){const miss=["contact","approach"].filter(k=>idxOf(c,k)==null);
     if(miss.length){toast("新增客戶請先選擇「"+miss.map(k=>k==="contact"?"一年內聯絡（交情）":"接近難易度").join("」和「")+"」");const el=document.querySelector(`[data-sf="${miss[0]}"]`);if(el){el.scrollIntoView({block:"center"});el.classList.remove("need");void el.offsetWidth;el.classList.add("need")}return false}}
   if(ageOf(c)!=null)c.age=ageBand(c);
+  if(c.address)c.address=c.address.trim();
+  if(!c.area&&c.address)c.area=areaFromAddr(c.address);
   if(c.jobCat!=="其他")delete c.jobOther;else c.jobOther=(c.jobOther||"").trim();
   const btn=$("#btnSave");if(btn){btn.disabled=true;btn.textContent="儲存中…"}
   const ok=await saveClient(c);
@@ -839,7 +848,7 @@ function parseTemplate(rows){
   }
   return out;
 }
-const FLAT=[["編號","no"],["姓名","name"],["經營階段","stage"],["來源","source"],["介紹人","referrer"],["生日","birthday"],["性別","gender"],["職業類別","jobCat"],["職業","job"],["居住區域","area"],["電話","phone"],["LINE","line"],["每月收入","income"],["年齡","age"],["婚姻","marital"],["房產","property"],["交情","contact"],["接近難易度","approach"],["對保險態度","attitude"],["分數","_score"],["分級","_grade"],["子女階段","kids"],["扶養父母","parents"],["收入型態","incomeType"],["房貸狀態","loan"],["既有保單","policies"],["理財經驗","invest"],["風險屬性","risk"],["需求","needs"],["決策方式","decision"],["最在意","focus"],["聯絡管道","channel"],["聯絡時段","timeslot"],["興趣嗜好","hobbies"],["增員潛力","recruit"],["Hashtag","tags"],["下次聯絡日","nextDate"],["最近聯絡","lastContact"],["備註","note"],["跟進紀錄","_logs"]];
+const FLAT=[["編號","no"],["姓名","name"],["經營階段","stage"],["來源","source"],["介紹人","referrer"],["生日","birthday"],["性別","gender"],["職業類別","jobCat"],["職業","job"],["居住區域","area"],["地址","address"],["電話","phone"],["LINE","line"],["每月收入","income"],["年齡","age"],["婚姻","marital"],["房產","property"],["交情","contact"],["接近難易度","approach"],["對保險態度","attitude"],["分數","_score"],["分級","_grade"],["子女階段","kids"],["扶養父母","parents"],["收入型態","incomeType"],["房貸狀態","loan"],["既有保單","policies"],["理財經驗","invest"],["風險屬性","risk"],["需求","needs"],["決策方式","decision"],["最在意","focus"],["聯絡管道","channel"],["聯絡時段","timeslot"],["興趣嗜好","hobbies"],["增員潛力","recruit"],["Hashtag","tags"],["下次聯絡日","nextDate"],["最近聯絡","lastContact"],["備註","note"],["跟進紀錄","_logs"]];
 const MULTI=["kids","incomeType","policies","invest","needs","channel","timeslot","hobbies","tags"];
 function parseFlat(objs){
   const out=[];let base=nextNo();
@@ -857,7 +866,11 @@ function parseFlat(objs){
       else if(k==="no")c.no=+v||c.no;
       else c[k]=String(v);
     });
-    c.name=name;out.push(c);
+    c.name=name;
+    if(c.phone&&/^9\d{8}$/.test(c.phone.replace(/\D/g,"")))c.phone="0"+c.phone; // Excel 吃掉開頭的 0
+    if(!c.area&&c.address)c.area=areaFromAddr(c.address);
+    if(ageOf(c)!=null)c.age=ageBand(c);
+    out.push(c);
   });
   return out;
 }
@@ -885,7 +898,7 @@ function exportClients(list,label,withOwner){
     else if(Array.isArray(v))v=v.join(k==="tags"?" ":"、");
     o[h]=v==null?"":v});return o});
   const ws=XLSX.utils.json_to_sheet(rows);
-  ws["!cols"]=Object.keys(rows[0]).map(h=>({wch:["備註","跟進紀錄","需求","既有保單","興趣嗜好","業務 Email"].includes(h)?30:12}));
+  ws["!cols"]=Object.keys(rows[0]).map(h=>({wch:["備註","跟進紀錄","需求","既有保單","興趣嗜好","業務 Email","地址"].includes(h)?30:12}));
   const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"客戶名單");
   const out=XLSX.write(wb,{type:"array",bookType:"xlsx"});
   const url=URL.createObjectURL(new Blob([out],{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}));
