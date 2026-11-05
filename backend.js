@@ -8,7 +8,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
 import {
   getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, collection, collectionGroup,
-  onSnapshot, serverTimestamp, query, where
+  onSnapshot, serverTimestamp, query, where, writeBatch
 } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 
 const app = initializeApp(FIREBASE_CONFIG);
@@ -76,27 +76,54 @@ export const backend = {
 
   deleteClient(uid, cid) { return deleteDoc(doc(db, "users", uid, "clients", cid)); },
 
-  // ── 主管：自己所有下線（任何一層）──
-  watchDownline(uid, cb, err) {
-    return onSnapshot(query(collection(db, "users"), where("managers", "array-contains", uid)),
+  // ── 增員名單：跟客戶名單分開存在 users/{uid}/recruits ──
+  watchMyRecruits(uid, cb, err) {
+    return onSnapshot(collection(db, "users", uid, "recruits"),
+      snap => cb(snap.docs.map(d => ({ ...d.data(), id: d.id, book: "rec" }))), err);
+  },
+
+  saveRecruit(uid, c) {
+    const body = clean({ ...c, ownerUid: uid });
+    delete body._owner;
+    return setDoc(doc(db, "users", uid, "recruits", c.id), body);
+  },
+
+  deleteRecruit(uid, id) { return deleteDoc(doc(db, "users", uid, "recruits", id)); },
+
+  watchRecruitsOf(uid, cb, err) {
+    return onSnapshot(collection(db, "users", uid, "recruits"),
+      snap => cb(snap.docs.map(d => ({ ...d.data(), id: d.id, book: "rec", _owner: uid }))), err);
+  },
+
+  watchAllRecruits(cb, err) {
+    return onSnapshot(collectionGroup(db, "recruits"),
+      snap => cb(snap.docs.map(d => ({ ...d.data(), id: d.id, book: "rec", _owner: d.ref.parent.parent.id }))), err);
+  },
+
+  // ── 主管：只讀自己的下線 ──
+  watchDownlines(uid, cb, err) {
+    return onSnapshot(query(collection(db, "users"), where("uplines", "array-contains", uid)),
       snap => cb(snap.docs.map(d => ({ id: d.id, ...d.data() }))), err);
   },
 
-  watchUserClients(uid, cb, err) {
+  watchClientsOf(uid, cb, err) {
     return onSnapshot(collection(db, "users", uid, "clients"),
       snap => cb(snap.docs.map(d => ({ ...d.data(), id: d.id, _owner: uid }))), err);
   },
 
   // ── 管理員 ──
-  setOrg(uid, managerUid, managers) {
-    return updateDoc(doc(db, "users", uid), { managerUid: managerUid || null, managers: managers || [] });
+  // 一次更新多位成員（直屬主管、上線、開通狀態），全部成功或全部不動
+  updateUsers(writes) {
+    const batch = writeBatch(db);
+    writes.forEach(w => batch.update(doc(db, "users", w.uid), { ...clean(w.data), ...(w.status ? { statusChangedAt: serverTimestamp() } : {}) }));
+    return batch.commit();
   },
 
   watchAdmins(cb, err) {
     return onSnapshot(collection(db, "admins"), snap => cb(snap.docs.map(d => ({ id: d.id, ...d.data() }))), err);
   },
 
-  addAdmin(uid) { return setDoc(doc(db, "admins", uid), { role: "admin", addedAt: serverTimestamp() }); },
+  setAdmin(uid) { return setDoc(doc(db, "admins", uid), { role: "admin", createdAt: serverTimestamp() }); },
 
   removeAdmin(uid) { return deleteDoc(doc(db, "admins", uid)); },
 
